@@ -1,0 +1,178 @@
+### Genome-wide association study (GWAS)
+
+# Everything has been run both in PLINK v1.9 and RVTESTs with similar results (not needed but wanted to double-check my results and to learn how to use both softwares). 
+
+# CREATE COVARIATE FILE
+# Run PCA to obtain PCs to adjust for population stratification (run on non-imputed QC:d data!):
+# Make sure to use high-quality SNPs and exclude high LD regions
+plink --bfile FILTERED.MPBC --maf 0.01 --geno 0.05 --hwe 1E-6 --exclude exclusion_regions_hg19.txt --make-bed --out FILTERED.MPBC_forPCA
+
+# The exclusion_regions_hg19.txt file contain the following regions to exclude:
+# chr1	48227412	52227412	1
+# chr2	86146488	101133568	2
+# chr2	89563673	89564169	3
+# chr2	98080299	98080324	4
+# chr2	183291754	190291755	5
+# chr3	47524995	50024996	6
+# chr3	83417309	86917310	7
+# chr5	44464242	50464243	8
+# chr5	128972100	131972101	9
+# chr6	25392020	33392022	10
+# chr6	56892040	63942041	11
+# chr6	139958306	142458307	12
+# chr7	55032505	66362565	13
+# chr8	7962589	11962591	14
+# chr8	42880842	49837447	15
+# chr8	111930823	114930824	16
+# chr10	36959993	43679994	17
+# chr11	87860351	90860352	18
+# chr12	33108732	41713733	19
+# chr20	32536338	35066586	20
+
+# Prune out unnecessary SNPs (only need to do this to generate PCs)
+plink --bfile FILTERED.MPBC_forPCA --indep-pairwise 50 5 0.5 --out prune
+
+# Keep only pruned SNPs (only need to do this to generate PCs)
+plink --bfile FILTERED.MPBC_forPCA --extract prune.prune.in --make-bed --out prune
+
+# Generate PCs
+plink --bfile prune --pca --out FILTERED.MPBC_PCA
+
+
+# Generating a Covariate File in R:
+
+# Read in the PCA Eigenvalues and Eigenvectors
+eigenvec <- FILTERED.MPBC_PCA <- read.table("~/Desktop/MPBC/FILTERED.MPBC_PCA.eigenvec", quote="\"", comment.char="")
+colnames(eigenvec) <- c("FID", "IID", "PC1", "PC2", "PC3", "PC4", "PC5", "PC6", "PC7", "PC8", "PC9", "PC10", "PC11", "PC12", "PC13", "PC14", "PC15", "PC16", "PC17", "PC18", "PC19", "PC20")
+# Add column containing the same ID format as the post-imputed data:
+eigenvec$IID <- paste0(eigenvec$FID,"_",eigenvec$IID)
+# Drop the IID column to prevent double columns
+eigenvec$FID <- NULL
+
+fam <- read.table("~/Desktop/MPBC/plink_files_soft/MPBC.Rsq03_sex_pheno_MAF05.fam", quote="\"", comment.char="")
+colnames(fam) <- c("FID", "IID", "PAT", "MAT", "SEX", "PHENO")
+
+fam$SEX_cov <- fam$SEX -1
+fam$pheno_01 <- fam$PHENO -1 
+
+# Read in other covariates
+Covar_info <- read.delim("~/Desktop/MPBC/Covar_info.txt")
+
+#Add age:
+fam$AGE=Covar_info$AGE[match(fam$IID, Covar_info$IID)]
+
+# Now combine with PCs
+combined <- left_join(fam, eigenvec, by=c("IID"))
+colnames(combined) <- c("FID","IID","PAT","MAT","SEX","PHENO","SEX_cov","pheno_01","AGE","PC1","PC2","PC3","PC4","PC5","PC6","PC7","PC8","PC9","PC10","PC11","PC12","PC13","PC14","PC15","PC16","PC17","PC18","PC19","PC20")
+
+setwd("~/Desktop/MPBC/plink_files_soft")
+# Save out the pheno_pcs file
+write.table(combined, file = "covariateFile_GWAS.txt", row.names=FALSE, quote = FALSE, sep="\t", col.names = TRUE)
+
+# Generating scree plot to set the numbers of appropriate PCs to add in the GWAS:
+eigenval <- read.table("~/Desktop/MPBC/plink_files_soft/FILTERED.MPBC_PCA.eigenval", quote="\"", comment.char="")
+eigenval <- as.numeric(eigenval$V1)
+num = 1:20
+plot(num,eigenval, xlab ="Factor number", ylab="Eigenvalue", col="black")
+
+
+# RUNNING GWAS IN PLINK
+# Files needed:
+# 1) QC:ed imputed plink files (rsq and MAF filtered, here: Rsq>0.3, MAF>5%)
+# 2) Covariate file
+
+cd Desktop/MPBC/plink_files_soft
+plink --bfile MPBC.Rsq03_sex_pheno_MAF05 --logistic --ci 0.95 --hide-covar --covar covariateFile_GWAS.txt --covar-name SEX,AGE,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10 --out MPBC.Rsq03_sex_pheno_MAF05_GWAS
+
+
+# RUNNING IN RVTESTS
+# Files needed:
+# 1) Covariate file
+# 2) Imputed genotype data (This is the .vcf file that is the output from the imputation server, not the plink files. They should be in this format chr$CHNUM.dose.vcf.gz and has not gone through post-imputation QC)
+# 3) Region files
+# ( 4) samplesToKeep.txt : File containing the IID of the individuals in the analysis)
+
+#Creating region files:
+This is to do the post-imputation QC (Here: Rsq>0.3, MAF>5%). The code below creates two files, which are useful for when running GWAS and reformatting the GWAS output (example for chr 22 here):
+maf05rsq03minimums_chr22.info, this file looks like this:
+SNP    ALT_Frq    Rsq
+22:17029525    0.9407    0.5927
+22:17030029    0.94073    0.59404
+22:17030126    0.94039    0.59182
+maf05rsq03minimums_chr22.txt, this is file looks like this:
+22:17029525-17029525
+22:17030029-17030029
+22:17030126-17030126
+
+Code to run in R:
+
+### MAF 5%, RSQ 0.3
+library(plyr) 
+#info files:
+setwd("~/Desktop/MPBC/Imputed_info_files_HRC")
+for(i in 1:22)
+{
+        input <- paste("chr",i,".info", sep = "")
+        data <- read.table(input, header = T)
+        dat <- subset(data, MAF >= 0.05 & Rsq >= 0.30)
+        dat$chr <- ldply(strsplit(as.character(dat$SNP), split = ":"))[[1]]
+        dat$bp <- ldply(strsplit(as.character(dat$SNP), split = ":"))[[2]]
+        dat$SNP2 <- paste(dat$chr,dat$bp,sep=":")
+        da <- dat[,c("SNP2","ALT_Frq","Rsq")]
+        write.table(da, paste("maf05rsq03minimums_chr",i,".info",sep = ""), row.names = F, quote = F, sep = "\t")
+}
+
+
+#SiteFiles:
+for(i in 1:22)
+{
+        input <- paste("chr",i,".info", sep = "")
+        data <- read.table(input, header = T)
+        dat <- subset(data, MAF >= 0.05 & Rsq >= 0.30)
+        dat$chr <- ldply(strsplit(as.character(dat$SNP), split = ":"))[[1]]
+        dat$bp <- ldply(strsplit(as.character(dat$SNP), split = ":"))[[2]]
+        dat$site <- paste(dat$chr, dat$bp, sep = " ")
+        da <- dat[,c("site")]
+        write.table(da, paste("maf05rsq03minimums_chr",i,".txt",sep = ""), col.names = F, row.names = F, quote = F, sep = "\t")
+}
+
+
+# Downloading and installing rvtests:
+git clone https://github.com/zhanxw/rvtests
+
+PATH=/Applications/rvtests/executable
+cd "Desktop/MPBC"
+
+# Running GWAS per chr
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr1.txt --out MPBC_GWAS_MAF05Rsq03.chr1 --single wald --inVcf chr1.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr2.txt --out MPBC_GWAS_MAF05Rsq03.chr2 --single wald --inVcf chr2.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr3.txt --out MPBC_GWAS_MAF05Rsq03.chr3 --single wald --inVcf chr3.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr4.txt --out MPBC_GWAS_MAF05Rsq03.chr4 --single wald --inVcf chr4.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr5.txt --out MPBC_GWAS_MAF05Rsq03.chr5 --single wald --inVcf chr5.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr6.txt --out MPBC_GWAS_MAF05Rsq03.chr6 --single wald --inVcf chr6.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr7.txt --out MPBC_GWAS_MAF05Rsq03.chr7 --single wald --inVcf chr7.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr8.txt --out MPBC_GWAS_MAF05Rsq03.chr8 --single wald --inVcf chr8.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr9.txt --out MPBC_GWAS_MAF05Rsq03.chr9 --single wald --inVcf chr9.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr10.txt --out MPBC_GWAS_MAF05Rsq03.chr10 --single wald --inVcf chr10.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr11.txt --out MPBC_GWAS_MAF05Rsq03.chr11 --single wald --inVcf chr11.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr12.txt --out MPBC_GWAS_MAF05Rsq03.chr12 --single wald --inVcf chr12.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr13.txt --out MPBC_GWAS_MAF05Rsq03.chr13 --single wald --inVcf chr13.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr14.txt --out MPBC_GWAS_MAF05Rsq03.chr14 --single wald --inVcf chr14.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr15.txt --out MPBC_GWAS_MAF05Rsq03.chr15 --single wald --inVcf chr15.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr16.txt --out MPBC_GWAS_MAF05Rsq03.chr16 --single wald --inVcf chr16.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr17.txt --out MPBC_GWAS_MAF05Rsq03.chr17 --single wald --inVcf chr17.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr18.txt --out MPBC_GWAS_MAF05Rsq03.chr18 --single wald --inVcf chr18.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr19.txt --out MPBC_GWAS_MAF05Rsq03.chr19 --single wald --inVcf chr19.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr20.txt --out MPBC_GWAS_MAF05Rsq03.chr20 --single wald --inVcf chr20.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr21.txt --out MPBC_GWAS_MAF05Rsq03.chr21 --single wald --inVcf chr21.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+rvtest --noweb --hide-covar --siteFile maf05rsq03minimums_chr22.txt --out MPBC_GWAS_MAF05Rsq03.chr22 --single wald --inVcf chr22.dose.vcf.gz --dosage DS --pheno covariateFile_GWAS.txt --pheno-name Pheno --covar covariateFile_GWAS.txt --covar-name SEX_cov,AGE,PC1,PC2,PC3,PC4,PC5 --peopleIncludeFile samplesToKeep.txt
+
+# Merge the results
+cat *.SingleWald.assoc | grep -v 'N_INFORMATIVE' > allChrs_MPBC_MAF05rsq03.assoc
+cat maf05rsq03minimums_chr*.info | grep -v 'Rsq' > allChrs_MPBC_MAF05rsq03.Info
+
+To test to the that is has worked with the exclusion of SNPs with rsq<0.3 and MAF>5% (optional: the files should be empty):
+awk '{if ($3<0.3) print$0}' allChrs_MPBC_MAF05rsq03.Info > Failed.txt
+awk '{if ($2<0.05) print$0}' allChrs_MPBC_MAF05rsq03.Info> Failed_MAF.txt
+
+##Then reformat and result visualization in R: See "Plots_GWAS_MAF05_Rsq03.R"
