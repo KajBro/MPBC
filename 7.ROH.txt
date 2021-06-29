@@ -1,0 +1,179 @@
+Author: Sara Bandres-Ciga
+Modified by: Kajsa Brolin
+
+## ROH in genes of interest ## 
+
+## GENERAL INFO:
+# plink2 = PLINK v1.9
+# Use the QC:d file prior to removal of related individuals and run additional needed QC (run on genotyped, non imputed data):
+
+# set wd
+#Variant missingness:
+plink2 --bfile MPBC_EuropeanAncestry --geno 0.05 --make-bed --out MPBC_HET1
+#Among remaining phenotypes, 942 are cases and 945 are controls. (929 + 13 = 942, 935 + 10 =945, seems correct)
+#Missingness by case-control:
+plink2 --bfile MPBC_HET1 --test-missing --out missing_snps_HET1
+awk '{if ($5 <= 0.0001) print $2 }' missing_snps_HET1.missing > missing_snps_1E4_HET1.txt
+plink2 --bfile MPBC_HET1 --exclude missing_snps_1E4_HET1.txt --make-bed --out MPBC_HET2
+#Missing by haplotype 
+plink2 --bfile MPBC_HET2 --test-mishap --out missing_hap_HET2 
+awk '{if ($8 <= 0.0001) print $9 }' missing_hap_HET2.missing.hap > missing_haps_1E4_HET2.txt
+sed 's/|/\/g/' missing_haps_1E4_HET2.txt > missing_haps_1E4_final_HET2.txt  
+plink2 --bfile MPBC_HET2 --exclude missing_haps_1E4_final_HET2.txt --make-bed --out MPBC_HET3
+#HWE and only autosomal
+plink2 --bfile MPBC_HET3 --filter-controls --hwe 1E-4 --write-snplist --out snplist_HET3.txt
+plink2 --bfile MPBC_HET3 --extract snplist_HET3.txt.snplist --autosome --make-bed --out MPBC_HET4
+
+#Remove non-needed files:
+rm MPBC_HET.bed
+rm MPBC_HET.bim 
+rm MPBC_HET.fam
+#etc
+
+# Pruning
+plink2 --bfile MPBC_HET4 --indep-pairwise 50 5 0.5 --out pruning
+plink2 --bfile MPBC_HET4 --extract pruning.prune.in --make-bed --out MPBC_HET4.pruned
+ 
+# ROH
+set wd
+plink2 --bfile MPBC_HET4.pruned --homozyg --homozyg-group --homozyg-window-snp 50 --homozyg-window-het 1 --homozyg-window-missing 5 --homozyg-window-threshold 0.05 --homozyg-gap 1000 --homozyg-het 1 --homozyg-density 50 --homozyg-kb 1000 --homozyg-snp 50 --out ROH.MPBC
+#--homozyg: Scan complete, found 47954 ROH.
+#7262 pools of overlapping ROH present.
+
+grep -v 'CON' ROH.MPBC.hom.overlap > ROH.MPBC.hom.overlap.clean.txt
+
+# Mapping to PD genes:
+# Create a gene list file (with genes of interest) with the format
+# chr4:5053169-5502725	GENENAME
+perl post_plink_ROH_mapping.pl ROH.MPBC.hom.overlap.clean.txt ROH.MPBC.hom.overlap.CON.txt geneList_KB.txt ROH.MPBC.hom.overlap.CON.PDgene.txt
+
+## Creating ROH to check-file:
+
+# Take output from last step and create a file called ROH_tocheck.txt including the following columns "case_to_control ratio SNP2 BP1 BP2 KB NSNP PD". See example "ROH_tocheck.txt"
+
+ROH.MPBC.hom.overlap.CON.PDgene <- read.delim("~/Desktop/toKajsa/ROH/KB/ROH.MPBC.hom.overlap.CON.PDgene.txt")
+ROHtoCheck<- ROH.MPBC.hom.overlap.CON.PDgene[,c("case_to_control","ratio", "CHR","SNP2", "BP1", "BP2", "KB", "NSNP", "PD.gene")]
+write.table(ROHtoCheck, paste("ROH_tocheck_KB",".txt",sep = ""), row.names = F, quote = F, sep = "\t")
+
+# ROH GENE ENRICHMENT PD GENES
+# In R
+library(dplyr)
+library(tidyr)
+library(plyr)
+library(data.table)
+ROH <- fread("ROH_tocheck_KB.txt", header = T)
+ROH$case <- ldply(strsplit(as.character(ROH$case_to_control), split = ":"))[[1]]
+ROH$control <- ldply(strsplit(as.character(ROH$case_to_control), split = ":"))[[2]]
+ROH$NcasesWithROHs <- as.numeric(ROH$case)
+ROH$NcontrolsWithROHs <- as.numeric(ROH$control)
+ROH$caseN <- as.numeric(ROH$case)
+ROH$controlN <- as.numeric(ROH$control)
+ROH$combinedN <- ROH$caseN + ROH$controlN
+ROH$P <- NA
+for(i in 1:length(ROH$case))
+        {
+        thisP <- prop.test(x = c(ROH$NcasesWithROHs[i], ROH$NcontrolsWithROHs[i]), n = c(942, 945)) # note the last part should be the total N for cases and then the total N for controls.
+        ROH$P[i] <- thisP$p.value}
+
+ROH$total_ROH_count <- ROH$caseN + ROH$controlN
+ROH$propCases <- ROH$caseN/942 #(Divide by number of cases)
+ROH$propControls <- ROH$controlN/945 #(Divide by number of controls)
+ROH$caseEnriched <- ifelse(ROH$propCases > ROH$propControls, 1, 0)
+ROH_subsetted <- subset(ROH, total_ROH_count >= 1 & caseEnriched == 1)
+Ngenes <- length(ROH_subsetted$PD)
+ROH_subsetted$passMultiTest <- ifelse(ROH_subsetted$P <= (0.05/Ngenes),1,0) #--> No ROH pass the multitest
+ROH_subsetted$Pass_Crit <- ifelse(ROH_subsetted$KB >= 1000, 1, 0)
+#Hence, no use of running this futher
+#subset(ROH_subsetted, passMultiTest == 1)
+#Output: Empty data.table (0 rows and 22 cols): case_to_control,ratio,CHR,SNP2,BP1,BP2...
+write.table(ROH_subsetted, file = "ROH_subsetted_KB.txt", quote = F, row.names = F, sep = "\t")
+ROH_caseEnriched <- subset(ROH, caseEnriched == 1)
+write.table(ROH_caseEnriched, file = "ROH_caseEnriched.txt", quote = F, row.names = F, sep = "\t")
+
+### To explore if your cases or controls have in general longer ROH segments (KB), average segment size (KBAVG) and higher number of ROH segments (NSEG) ###
+data <- read.table("ROH.MPBC.hom.indiv", header = T)
+head(data) #To check the file
+data$case == data$PHE - 1
+data$case <- data$PHE - 1
+head(data) #To check again
+summary(data$case)
+
+#1) NSEG = The number of homozygous segments spread across the genome 
+meanCaseNSEG <- mean(data$NSEG[data$case == 1])
+meanControlNSEG <- mean(data$NSEG[data$case == 0])
+
+NSEG <- glm(case ~ NSEG, data = data, family = "binomial")
+summary(NSEG)
+
+#2) KB: Total kb distance spanned by those segments 
+meanCaseKB <- mean(data$KB[data$case == 1])
+meanControlKB <- mean(data$KB[data$case == 0])
+
+KB <- glm(case ~ KB, data = data, family = "binomial")
+summary(KB)
+
+#3) KBAVG: Average segment size 
+meanCaseKBAVG <- mean(data$KBAVG[data$case == 1])
+meanControlKBAVG <- mean(data$KBAVG[data$case == 0])
+
+KBAVG <- glm(case ~ KBAVG, data = data, family = "binomial")
+summary(KBAVG)
+
+
+### ALL GENES
+# GENE ENRICHMENT ALL GENES:
+# 1) Create a genelist file that match the format for mapping:
+# Format need to be: chr4:5053169-5502725	STK32B
+# Genomic coordinates on the human genome GRCh37 for 26,292 genes were downloaded from the PLINK resources website (https://www.cog-genomics.org/plink/1.9/resources).
+glist.hg19 <- read.table("~/Desktop/glist-hg19", quote="\"", comment.char="")
+glist.hg19$chrX <- paste("chr",glist.hg19$V1, sep = "")
+glist.hg19$chrXpos1 <- paste(glist.hg19$chrX,glist.hg19$V2, sep = ":")
+glist.hg19$chrXpos2 <- paste(glist.hg19$chrXpos1,glist.hg19$V3, sep = "-")
+gene_listALL <- data.frame(glist.hg19$chrXpos2, glist.hg19$V4)
+write.table(gene_listALL, paste("gene_listALL",".txt",sep = ""), col.names = F, row.names = F, quote = F, sep = "\t")
+
+# 2) Run perl script on ROH-part1:
+# perl post_plink_ROH_mapping.pl ROH.MPBC.hom.overlap.clean.txt ROH.MPBC.hom.overlap.CON.txt gene_listALL.txt ROH.MPBC.hom.overlap.CON.ALLgenes.txt
+
+# 3) Creating ROH to check-file for all genes:
+# Take output from last step and create a file called ROH_tocheck.txt including the following columns "case_to_control ratio SNP2 BP1 BP2 KB NSNP PD". 
+ROH.MPBC.hom.overlap.CON.ALLgenes <- read.delim("~/Desktop/toKajsa/ROH/KB/ROH.MPBC.hom.overlap.CON.ALLgenes.txt")
+ROHtoCheck_ALL<- ROH.MPBC.hom.overlap.CON.ALLgenes[,c("case_to_control","ratio", "CHR","SNP2", "BP1", "BP2", "KB", "NSNP", "PD.gene")]
+write.table(ROHtoCheck_ALL, paste("ROH_tocheck_ALL_KB",".txt",sep = ""), row.names = F, quote = F, sep = "\t")
+
+
+# 4) ROH GENE ENRICHMENT
+library(dplyr)
+library(tidyr)
+library(plyr)
+library(data.table)
+ROH <- fread("ROH_tocheck_ALL_KB.txt", header = T)
+ROH$case <- ldply(strsplit(as.character(ROH$case_to_control), split = ":"))[[1]]
+ROH$control <- ldply(strsplit(as.character(ROH$case_to_control), split = ":"))[[2]]
+ROH$NcasesWithROHs <- as.numeric(ROH$case)
+ROH$NcontrolsWithROHs <- as.numeric(ROH$control)
+ROH$caseN <- as.numeric(ROH$case)
+ROH$controlN <- as.numeric(ROH$control)
+ROH$combinedN <- ROH$caseN + ROH$controlN
+ROH$P <- NA
+for(i in 1:length(ROH$case))
+{
+        thisP <- prop.test(x = c(ROH$NcasesWithROHs[i], ROH$NcontrolsWithROHs[i]), n = c(942, 945)) # note the last part should be the total N for cases and then the total N for controls.
+        ROH$P[i] <- thisP$p.value}
+
+ROH$total_ROH_count <- ROH$caseN + ROH$controlN
+ROH$propCases <- ROH$caseN/942 #(Divide by number of cases)
+ROH$propControls <- ROH$controlN/945 #(Divide by number of controls)
+ROH$caseEnriched <- ifelse(ROH$propCases > ROH$propControls, 1, 0)
+ROH_subsetted <- subset(ROH, total_ROH_count >= 1 & caseEnriched == 1)
+Ngenes <- length(ROH_subsetted$PD)
+ROH_subsetted$passMultiTest <- ifelse(ROH_subsetted$P <= (0.05/Ngenes),1,0) 
+ROH_subsetted$Pass_Crit <- ifelse(ROH_subsetted$KB >= 1000, 1, 0)
+ROH_subsetted_1MB <- subset(ROH_subsetted, KB>=1000)
+#Hence, no use of running this futher
+#subset(ROH_subsetted, passMultiTest == 1)
+#Output: Empty data.table (0 rows and 23 cols): case_to_control,ratio,CHR,SNP2,BP1,BP2...
+write.table(ROH_subsetted, file = "ROH_subsetted_KB.txt", quote = F, row.names = F, sep = "\t")
+ROH_caseEnriched <- subset(ROH, caseEnriched == 1)
+write.table(ROH_caseEnriched, file = "ROH_caseEnriched.txt", quote = F, row.names = F, sep = "\t")
+

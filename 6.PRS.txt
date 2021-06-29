@@ -1,0 +1,129 @@
+## PD POLYGENIC RISK SCORE (PRS)
+# Using publicly available betas from Nalls 2019: https://github.com/neurogenetics/genetic-risk-score/blob/master/META5_GRS_chr_bp.txt
+# I have needed to update the format in this file from
+# 1:154898185	C	0.2812
+# to
+# 1:154898185:G:C	C	0.2812
+# to match the format of the imputed data
+
+# Calculate Score (profile) in PLINK v1.9
+# set wd
+
+plink --bfile MPBC_HRC_Rsq03_updated --hwe 1E-06 --geno 0.1 --mind 0.1 --score META5_GRS_chr_bp_IDchanged.txt --out MPBC_HRC_Rsq03_PD_PRS
+
+#--score: 90 valid predictors loaded.
+#--score: Results written to MPBC_HRC_Rsq03_PD_PRS.profile 
+
+# Read PLINK output, merge with covariate file and recode CASE (1) and CONTROL (0)
+# In R:
+
+# Download the necessary packages 
+if (!require(tidyverse)) install.packages('tidyr')
+if (!require(data.table)) install.packages('data.table')
+if (!require(dplyr)) install.packages('dplyr')
+if (!require(plyr)) install.packages('plyr')
+if (!require(ggplot2)) install.packages('ggplot2')
+if (!require(plotROC)) install.packages('plotROC')
+if (!require(caret)) install.packages('caret')
+
+# Load the necessary packages 
+library(tidyr)
+library(data.table)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(plotROC)
+library(caret)
+ 
+# PD PRS output from PLINK
+temp_data <- read.table("MPBC_HRC_Rsq03_PD_PRS.profile", header = T)
+temp_covs <- read.table("SampleInfo_AddedCovariates.txt", header = T)
+# Drop the IID column to prevent double columns
+temp_covs$IID <- NULL
+data <- merge(temp_data, temp_covs, by = "FID")
+data$CASE <- data$pheno_01
+
+# Normalize Score to Z-Score
+meanControls <- mean(data$SCORE[data$CASE == 0])
+meanCase <- mean(data$SCORE[data$CASE == 1]) 
+sdControls <- sd(data$SCORE[data$CASE == 0])
+data$zSCORE <- (data$SCORE - meanControls)/sdControls
+options(digits=10)
+
+# Perform logistic regression adjusted for covariates
+PDstatus <- glm(as.factor(CASE) ~ zSCORE + AGE + Sex + RwPD + PC1 + PC2 + PC3 + PC4 + PC5, family='binomial',data = data)
+summary(PDstatus)
+exp(cbind(OR = (coef(PDstatus)), confint(PDstatus)))
+
+# Data visualization - Quantile plots
+# 1) PD STATUS
+#Make quantiles
+data$quantile1 <- ifelse(data$zSCORE <= quantile(data$zSCORE)[2], 1, 0)
+data$quantile2 <- ifelse(data$zSCORE > quantile(data$zSCORE)[2] & data$zSCORE <= quantile(data$zSCORE)[3], 1, 0)
+data$quantile3 <- ifelse(data$zSCORE > quantile(data$zSCORE)[3] & data$zSCORE <= quantile(data$zSCORE)[4], 1, 0)
+data$quantile4 <- ifelse(data$zSCORE > quantile(data$zSCORE)[4], 1, 0)
+data$quantiles <- 1
+data$quantiles[data$quantile2 == 1] <- 2
+data$quantiles[data$quantile3 == 1] <- 3
+data$quantiles[data$quantile4 == 1] <- 4
+quintile_PDstatus <- glm(as.factor(CASE) ~ as.factor(data$quantiles) + AGE + Sex + PC1 + PC2 + PC3 + PC4 + PC5 + RwPD, family='binomial',data = data)
+
+# Summarize the regression and export a table - Want to have OR and CI instead of BETA and SE
+summary(quintile_PDstatus)
+
+quintile_PDstatus_summary <- data.frame(exp(cbind(OR = (coef(quintile_PDstatus)), confint(quintile_PDstatus))))
+quintile_PDstatus_summary <- quintile_PDstatus_summary[2:4,1:3] #To get only OR and CI for the quantiles
+names(quintile_PDstatus_summary) <- c('OR','2.5%','97.5%')
+quintile_PDstatus_summary$QUANTILE <- c('2','3','4')
+quintile_PDstatus_summary[4,] <- c(0,0,0,'1')
+write.table(quintile_PDstatus_summary_sorted, 'quantile_table_MPBC_PD_PRS_OR_201102.csv', quote = F, row.names = F, sep = ',')
+
+# Make quantile plot - ODDS RATIO
+to_plot <- read.table('quantile_table_MPBC_PD_PRS_OR_201102.csv', header = T, sep = ',')
+to_plot$low <- to_plot$X2.5.
+to_plot$high <- to_plot$X97.5.
+plotted <- ggplot(to_plot, aes(x=QUANTILE, y=OR)) + geom_pointrange(aes(ymin = low, ymax = high), size=0.7) + 
+        scale_y_continuous(name = "Odds ratio (95% CI)", breaks = c(0,1,2,3,4,5,6)) + xlab("Quantiles for GRS (Z-standardized)") +
+        geom_errorbar(aes(ymin = low, ymax = high, width = 0.05)) +
+        theme(axis.text=element_text(size=14), axis.title=element_text(size=16), panel.background = element_rect(fill = "white"), axis.line = element_line(size = 0.5, colour = "black"), panel.grid.major = element_line(color = "grey90"))
+ggsave(plot = plotted, filename = 'plotQuantile_PRS_MPBC_OR_PDstatus.png', width = 5, height = 6, units = 'in', dpi = 600)
+
+
+# 2) PD PRS AAD
+
+# PD PRS output from PLINK
+temp_data_AAD <- read.table("MPBC_HRC_Rsq03_PD_PRS.profile", header = T)
+temp_covs_AAD <- read.table("temp_covs_AAD_AddedCoveriates.txt", header = T)
+
+# Drop the IID column to prevent double columns
+temp_covs_AAD$IID <- NULL
+data_AAD <- merge(temp_data_AAD, temp_covs_AAD, by = "FID")
+data_AAD$CASE <- data_AAD$pheno_01
+
+# Subset only cases with AAD data (should already be the case when the data was merged with the sampleinfo_AAD)
+cases <- subset(data_AAD, CASE == 1)
+
+# Calculate Z-scores
+meanPop <- mean(cases$SCORE)
+sdPop <- sd(cases$SCORE)
+cases$zSCORE <- (cases$SCORE - meanPop)/sdPop
+sdPop_zSCORE <- sd(cases$zSCORE)
+# Check association between GRS and AAD
+grsTests <- lm(AAD ~ zSCORE + Sex + RwPD + PC1 + PC2 + PC3 + PC4 + PC5, data = cases)
+summary(grsTests)
+
+# Smooth regression plot
+plot_AAD_smooth <- ggplot(grsTests, aes(x=zSCORE, y=AAD)) +
+        geom_smooth(method='lm', color="steelblue3", fill = "steelblue3") +
+        scale_y_continuous(name = "Age at diagnosis (AAD), years", labels = c(58, 60, 62, 64, 66, 68,70), breaks = c(58, 60, 62, 64, 66, 68,70)) +
+        scale_x_continuous(name = "Z-standardized genetic risk score (GRS)", labels = c(-4, -2, 0, 2,4), breaks = c(-4, -2, 0, 2,4)) +
+        theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), panel.background = element_rect(fill = "white"), axis.line = element_line(size = 0.5, colour = "black"), panel.grid.major = element_line(color = "grey90"))
+ggsave(plot = plot_AAD_smooth, filename = 'plotAAD_GRS_smooth.png', width = 5, height = 6, units = 'in', dpi = 600)
+
+# Normal regression plot
+plot_AAD <- ggplot(grsTests, aes(x=zSCORE, y=AAD)) + geom_point(alpha = 0.8, size =2) + 
+        geom_smooth(method = lm, color="steelblue3", fill = "steelblue3") +
+        scale_y_continuous(name = "Age at diagnosis (AAD), years", labels = c(20, 30, 40, 50, 60, 70, 80, 90, 100), breaks = c(20, 30, 40, 50, 60, 70, 80, 90, 100), limits=c(20, 100)) +
+        scale_x_continuous(name = "Z-standardized genetic risk score (GRS)") + 
+        theme(axis.text = element_text(size = 14), axis.title = element_text(size = 16), panel.background = element_rect(fill = "white"), axis.line = element_line(size = 0.5, colour = "black"), panel.grid.major = element_line(color = "grey90"))
+ggsave(plot = plot_AAD, filename = 'plotAAD_GRS_scatter.png', width = 5, height = 6, units = 'in', dpi = 600)

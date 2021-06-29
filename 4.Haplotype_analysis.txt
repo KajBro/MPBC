@@ -1,0 +1,407 @@
+### Haplotype analyses (PLPP4 +/- 100kb)
+
+#INFO:
+# Run on QC:ed genotyped data
+# plink2 = PLINK v1.9
+
+# 1) Extract PLPP4 +/- 100 kb region from genotyped data (no MAF filter):
+# PLPP4 position on GRCh37/hg19:10:122216466-122349376 UCSC --> 10:122116466-122449376 (region to extract)
+
+plink2 --bfile MPBC_HWE --chr 10 -from-bp 122116466 --to-bp 122449376 --make-bed --out PLPP4/MPBC_FILTERED.PLPP4_01Mb
+plink2 --bfile MPBC_HWE --chr 10 -from-bp 122116466 --to-bp 122449376 --maf 0.01  --make-bed --out PLPP4/MPBC_FILTERED.PLPP4_01Mb_MAF01
+
+# 2) Define haplotype blocks in PLINK
+plink2 --bfile MPBC_FILTERED.PLPP4_01Mb --maf 0.01 --blocks --out MPBC_PLPP4_blocks_01Mb
+##--blocks: 12 haploblocks written to MPBC_PLPP4_blocks_01Mb.blocks 
+
+#Generate freq file and recode tp ped/map format
+plink2 --bfile MPBC_FILTERED.PLPP4_01Mb --recode --out MPBC_FILTERED.PLPP4_01Mb
+plink2 --bfile MPBC_FILTERED.PLPP4_01Mb_MAF01 --freq case-control --out MPBC_FILTERED.PLPP4_01Mb_fr
+
+# 3) PLPP4 haplotype analyses in R
+
+#PLPP4 haplotype analyses - R
+
+install.packages("haplo.stats")
+install.pckages("data.table")
+library(haplo.stats)
+library(data.table)
+
+#Haplotypes and haplotype blocks are retrieved from PLINK v1.9 --blocks (N=12 haplotype blocks in PLPP4 +/100kb, H1-H12) --> .blocks file 
+
+#Add SNP name to PED
+PED <- read.table("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/MPBC_FILTERED.PLPP4_01Mb.ped", quote="\"", comment.char="")
+# Create list with all SNPs, 2 alleles
+MPBC_FILTERED.PLPP4_01Mb_1 <- read.table("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/MPBC_FILTERED.PLPP4_01Mb.map", header=FALSE)
+MPBC_FILTERED.PLPP4_01Mb_2 <- read.table("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/MPBC_FILTERED.PLPP4_01Mb.map", header=FALSE)
+MPBC_FILTERED.PLPP4_01Mb_1$V2 <- paste0(MPBC_FILTERED.PLPP4_01Mb_1$V2, sep="_", "1")
+MPBC_FILTERED.PLPP4_01Mb_2$V2 <- paste0(MPBC_FILTERED.PLPP4_01Mb_2$V2, sep="_", "2")
+colnames(MPBC_FILTERED.PLPP4_01Mb_1) <- c("CHR", "SNP", "CM", "POS")
+colnames(MPBC_FILTERED.PLPP4_01Mb_2) <- c("CHR", "SNP", "CM", "POS")
+MPBC_FILTERED.PLPP4_01Mb_2alleles <- rbind(MPBC_FILTERED.PLPP4_01Mb_1, MPBC_FILTERED.PLPP4_01Mb_2) 
+#Sort file and create geno matrix:
+PLPP4_01_pos <- MPBC_FILTERED.PLPP4_01Mb_2alleles[order(MPBC_FILTERED.PLPP4_01Mb_2alleles$POS),]
+PLPP4_01_pos_SNP <- PLPP4_01_pos[,c("SNP")]
+write.table(PLPP4_01_pos_SNP, file=paste("PLPP4_01_pos_SNP.txt"), quote = F, sep = "\t", row.names = F, col.names = F)
+PLPP4_01_pos <- readLines("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/PLPP4_01_pos_SNP.txt")
+colnames(PED) <- c("FID", "IID", "PAT","MAT", "SEX", "PHENO", PLPP4_01_pos)
+write.table(PED, 'Geno_matrix_PLPP401Mb.tab', quote = F, row.names = F, sep = '\t')
+
+#Covariate info:
+SampleInfo_Adjustment <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/SampleInfo_Adjust2.txt")
+adj1 <- data.frame(SampleInfo_Adjustment[,c("SEX_cov", "AGE","PC1", "PC2", "PC3", "PC4", "PC5")])
+adj2 <- data.frame(SampleInfo_Adjustment[,c("SEX_cov", "AGE","PC1", "PC2", "PC3", "PC4", "PC5", "nicotine")])
+
+#Create haplptype files (N=12 blocks)
+#H1
+#Information on the different SNPs in each haplotype block was retrieved from the .
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H1_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs2420703_1","rs2420703_2","rs71484626_1", "rs71484626_2","GSA.rs2420706_1", "GSA.rs2420706_2", "rs2420707_1", "rs2420707_2", "exm2267134_1", "exm2267134_2", "rs12571802_1", "rs12571802_2", "rs2901237_1", "rs2901237_2", "rs17100130_1","rs17100130_2")]
+geno <- data.frame(H1_PLPP4_01Mb[,c(7:22)])
+#For label, I only use numbers per SNP. In H1, there are 8 SNPs:
+label <- c("1", "2", "3", "4", "5", "6", "7", "8")
+#Set binary pheno (0 ctrl, 1 pat):
+H1_PLPP4_01Mb$PHENO_01 <- H1_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H1_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted logistic regression:
+H1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H1, nlines=10, digits=2)
+names(H1)
+H1_cc.df <- H1$cc.df
+H1_cc.df_sort <- H1_cc.df[order(H1_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H1_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H1_adj1, nlines=10, digits=2)
+H1_adj1_cc.df <- H1_adj1$cc.df
+H1_adj1_cc.df_sort <- H1_adj1_cc.df[order(H1_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H1_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H1_adj2, nlines=10, digits=2)
+H1_adj2_cc.df <- H1_adj2$cc.df
+H1_adj2_cc.df_sort <- H1_adj2_cc.df[order(H1_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H1_comb <- rbind(H1_cc.df_sort, "Adj1", H1_adj1_cc.df_sort, "Adj2", H1_adj2_cc.df_sort)
+write.table(H1_comb, 'H1.txt', quote = F, row.names = F, sep = '\t')
+
+
+#H2
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H2_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs7068076_1","rs7068076_2","rs36108282_1","rs36108282_2")]
+geno <- data.frame(H2_PLPP4_01Mb[,c(7:10)])
+#For label, I only use numbers per SNP. In H2, there are 2 SNPs:
+label <- c("1", "2")
+#Set binary pheno (0 ctrl, 1 pat):
+H2_PLPP4_01Mb$PHENO_01 <- H2_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H2_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H2, nlines=10, digits=2)
+names(H2)
+H2_cc.df <- H2$cc.df
+H2_cc.df_sort <- H2_cc.df[order(H2_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H2_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H2_adj1, nlines=10, digits=2)
+H2_adj1_cc.df <- H2_adj1$cc.df
+H2_adj1_cc.df_sort <- H2_adj1_cc.df[order(H2_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H2_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H2_adj2, nlines=10, digits=2)
+H2_adj2_cc.df <- H2_adj2$cc.df
+H2_adj2_cc.df_sort <- H2_adj2_cc.df[order(H2_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H2_comb <- rbind(H2_cc.df_sort, "Adj1", H2_adj1_cc.df_sort, "Adj2", H2_adj2_cc.df_sort)
+write.table(H2_comb, 'H2.txt', quote = F, row.names = F, sep = '\t')
+
+#H3
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H3_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs4595466_1","rs4595466_2","rs2244544_1","rs2244544_2","GSA.rs77772193_1","GSA.rs77772193_2")]
+geno <- data.frame(H3_PLPP4_01Mb[,c(7:12)])
+#For label, I only use numbers per SNP. In H3, there are 3 SNPs:
+label <- c("1", "2", "3")
+#Set binary pheno (0 ctrl, 1 pat):
+H3_PLPP4_01Mb$PHENO_01 <- H3_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H3_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H3 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H3, nlines=10, digits=2)
+names(H3)
+H3_cc.df <- H3$cc.df
+H3_cc.df_sort <- H3_cc.df[order(H3_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H3_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H3_adj1, nlines=10, digits=2)
+H3_adj1_cc.df <- H3_adj1$cc.df
+H3_adj1_cc.df_sort <- H3_adj1_cc.df[order(H3_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H3_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H3_adj2, nlines=10, digits=2)
+H3_adj2_cc.df <- H3_adj2$cc.df
+H3_adj2_cc.df_sort <- H3_adj2_cc.df[order(H3_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H3_comb <- rbind(H3_cc.df_sort, "Adj1", H3_adj1_cc.df_sort, "Adj2", H3_adj2_cc.df_sort)
+write.table(H3_comb, 'H3.txt', quote = F, row.names = F, sep = '\t')
+
+#H4
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H4_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs60288721_1","rs60288721_2","rs1536389_1","rs1536389_2")]
+geno <- data.frame(H4_PLPP4_01Mb[,c(7:10)])
+#For label, I only use numbers per SNP. In H4, there are 2 SNPs:
+label <- c("1", "2")
+#Set binary pheno (0 ctrl, 1 pat):
+H4_PLPP4_01Mb$PHENO_01 <- H4_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H4_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H4 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H4, nlines=10, digits=2)
+names(H4)
+H4_cc.df <- H4$cc.df
+H4_cc.df_sort <- H4_cc.df[order(H4_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H4_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H4_adj1, nlines=10, digits=2)
+H4_adj1_cc.df <- H4_adj1$cc.df
+H4_adj1_cc.df_sort <- H4_adj1_cc.df[order(H4_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H4_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H4_adj2, nlines=10, digits=2)
+H4_adj2_cc.df <- H4_adj2$cc.df
+H4_adj2_cc.df_sort <- H4_adj2_cc.df[order(H4_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H4_comb <- rbind(H4_cc.df_sort, "Adj1", H4_adj1_cc.df_sort, "Adj2", H4_adj2_cc.df_sort)
+write.table(H4_comb, 'H4.txt', quote = F, row.names = F, sep = '\t')
+
+#H5 
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H5_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs11199378_1","rs11199378_2","rs12768425_1","rs12768425_2")]
+geno <- data.frame(H5_PLPP4_01Mb[,c(7:10)])
+#For label, I only use numbers per SNP. In H5, there are 2 SNPs:
+label <- c("1", "2")
+#Set binary pheno (0 ctrl, 1 pat):
+H5_PLPP4_01Mb$PHENO_01 <- H5_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H5_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H5 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H5, nlines=10, digits=2)
+names(H5)
+H5_cc.df <- H5$cc.df
+H5_cc.df_sort <- H5_cc.df[order(H5_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H5_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H5_adj1, nlines=10, digits=2)
+H5_adj1_cc.df <- H5_adj1$cc.df
+H5_adj1_cc.df_sort <- H5_adj1_cc.df[order(H5_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H5_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H5_adj2, nlines=10, digits=2)
+H5_adj2_cc.df <- H5_adj2$cc.df
+H5_adj2_cc.df_sort <- H5_adj2_cc.df[order(H5_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H5_comb <- rbind(H5_cc.df_sort, "Adj1", H5_adj1_cc.df_sort, "Adj2", H5_adj2_cc.df_sort)
+write.table(H5_comb, 'H5.txt', quote = F, row.names = F, sep = '\t')
+
+#H6
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H6_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs978854_1","rs978854_2","rs7910507_1","rs7910507_2","GSA.rs10886711_1","GSA.rs10886711_2","rs11199417_1","rs11199417_2","GSA.rs10886717_1","GSA.rs10886717_2")]
+geno <- data.frame(H6_PLPP4_01Mb[,c(7:16)])
+#For label, I only use numbers per SNP. In H6, there are 5 SNPs:
+label <- c("1", "2", "3", "4", "5")
+#Set binary pheno (0 ctrl, 1 pat):
+H6_PLPP4_01Mb$PHENO_01 <- H6_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H6_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H6 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H6, nlines=10, digits=2)
+names(H6)
+H6_cc.df <- H6$cc.df
+H6_cc.df_sort <- H6_cc.df[order(H6_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H6_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H6_adj1, nlines=10, digits=2)
+H6_adj1_cc.df <- H6_adj1$cc.df
+H6_adj1_cc.df_sort <- H6_adj1_cc.df[order(H6_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H6_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H6_adj2, nlines=10, digits=2)
+H6_adj2_cc.df <- H6_adj2$cc.df
+H6_adj2_cc.df_sort <- H6_adj2_cc.df[order(H6_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H6_comb <- rbind(H6_cc.df_sort, "Adj1", H6_adj1_cc.df_sort, "Adj2", H6_adj2_cc.df_sort)
+write.table(H6_comb, 'H6.txt', quote = F, row.names = F, sep = '\t')
+
+#H7
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H7_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","GSA.rs75318356_1","GSA.rs75318356_2","rs7912073_1","rs7912073_2","rs11199429_1","rs11199429_2")]
+geno <- data.frame(H7_PLPP4_01Mb[,c(7:12)])
+#For label, I only use numbers per SNP. In H7, there are 3 SNPs:
+label <- c("1", "2", "3")
+#Set binary pheno (0 ctrl, 1 pat):
+H7_PLPP4_01Mb$PHENO_01 <- H7_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H7_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H7 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H7, nlines=10, digits=2)
+names(H7)
+H7_cc.df <- H7$cc.df
+H7_cc.df_sort <- H7_cc.df[order(H7_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H7_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H7_adj1, nlines=10, digits=2)
+H7_adj1_cc.df <- H7_adj1$cc.df
+H7_adj1_cc.df_sort <- H7_adj1_cc.df[order(H7_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H7_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H7_adj2, nlines=10, digits=2)
+H7_adj2_cc.df <- H7_adj2$cc.df
+H7_adj2_cc.df_sort <- H7_adj2_cc.df[order(H7_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H7_comb <- rbind(H7_cc.df_sort, "Adj1", H7_adj1_cc.df_sort, "Adj2", H7_adj2_cc.df_sort)
+write.table(H7_comb, 'H7.txt', quote = F, row.names = F, sep = '\t')
+
+#H8
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H8_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs9943454_1","rs9943454_2",	"rs41287958_1",	"rs41287958_2")]
+geno <- data.frame(H8_PLPP4_01Mb[,c(7:10)])
+#For label, I only use numbers per SNP. In H8, there are 32SNPs:
+label <- c("1", "2")
+#Set binary pheno (0 ctrl, 1 pat):
+H8_PLPP4_01Mb$PHENO_01 <- H8_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H8_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H8 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H8, nlines=10, digits=2)
+names(H8)
+H8_cc.df <- H8$cc.df
+H8_cc.df_sort <- H8_cc.df[order(H8_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H8_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H8_adj1, nlines=10, digits=2)
+H8_adj1_cc.df <- H8_adj1$cc.df
+H8_adj1_cc.df_sort <- H8_adj1_cc.df[order(H8_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H8_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H8_adj2, nlines=10, digits=2)
+H8_adj2_cc.df <- H8_adj2$cc.df
+H8_adj2_cc.df_sort <- H8_adj2_cc.df[order(H8_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H8_comb <- rbind(H8_cc.df_sort, "Adj1", H8_adj1_cc.df_sort, "Adj2", H8_adj2_cc.df_sort)
+write.table(H8_comb, 'H8.txt', quote = F, row.names = F, sep = '\t')
+
+#H9
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H9_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs2420779_1","rs2420779_2","GSA.rs12415215_1","GSA.rs12415215_2")]
+geno <- data.frame(H9_PLPP4_01Mb[,c(7:10)])
+#For label, I only use numbers per SNP. In H9, there are 2SNPs:
+label <- c("1", "2")
+#Set binary pheno (0 ctrl, 1 pat):
+H9_PLPP4_01Mb$PHENO_01 <- H9_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H9_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H9 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H9, nlines=10, digits=2)
+names(H9)
+H9_cc.df <- H9$cc.df
+H9_cc.df_sort <- H9_cc.df[order(H9_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H9_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H9_adj1, nlines=10, digits=2)
+H9_adj1_cc.df <- H9_adj1$cc.df
+H9_adj1_cc.df_sort <- H9_adj1_cc.df[order(H9_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H9_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H9_adj2, nlines=10, digits=2)
+H9_adj2_cc.df <- H9_adj2$cc.df
+H9_adj2_cc.df_sort <- H9_adj2_cc.df[order(H9_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H9_comb <- rbind(H9_cc.df_sort, "Adj1", H9_adj1_cc.df_sort, "Adj2", H9_adj2_cc.df_sort)
+write.table(H9_comb, 'H9.txt', quote = F, row.names = F, sep = '\t')
+
+#H10
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H10_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs10886725_1","rs10886725_2","rs7068008_1","rs7068008_2","GSA.rs4752444_1","GSA.rs4752444_2")]
+geno <- data.frame(H10_PLPP4_01Mb[,c(7:12)])
+#For label, I only use numbers per SNP. In H10, there are 3 SNPs:
+label <- c("1", "2", "3")
+#Set binary pheno (0 ctrl, 1 pat):
+H10_PLPP4_01Mb$PHENO_01 <- H10_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H10_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H10 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H10, nlines=10, digits=2)
+names(H10)
+H10_cc.df <- H10$cc.df
+H10_cc.df_sort <- H10_cc.df[order(H10_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H10_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H10_adj1, nlines=10, digits=2)
+H10_adj1_cc.df <- H10_adj1$cc.df
+H10_adj1_cc.df_sort <- H10_adj1_cc.df[order(H10_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H10_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H10_adj2, nlines=10, digits=2)
+H10_adj2_cc.df <- H10_adj2$cc.df
+H10_adj2_cc.df_sort <- H10_adj2_cc.df[order(H10_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H10_comb <- rbind(H10_cc.df_sort, "Adj1", H10_adj1_cc.df_sort, "Adj2", H10_adj2_cc.df_sort)
+write.table(H10_comb, 'H10.txt', quote = F, row.names = F, sep = '\t')
+
+#H11
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H11_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs2420768_1","rs2420768_2","rs7914572_1","rs7914572_2","rs11594222_1","rs11594222_2")]
+geno <- data.frame(H11_PLPP4_01Mb[,c(7:12)])
+#For label, I only use numbers per SNP. In H11, there are 3 SNPs:
+label <- c("1", "2", "3")
+#Set binary pheno (0 ctrl, 1 pat):
+H11_PLPP4_01Mb$PHENO_01 <- H11_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H11_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H11 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H11, nlines=10, digits=2)
+names(H11)
+H11_cc.df <- H11$cc.df
+H11_cc.df_sort <- H11_cc.df[order(H11_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H11_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H11_adj1, nlines=10, digits=2)
+H11_adj1_cc.df <- H11_adj1$cc.df
+H11_adj1_cc.df_sort <- H11_adj1_cc.df[order(H11_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H11_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H11_adj2, nlines=10, digits=2)
+H11_adj2_cc.df <- H11_adj2$cc.df
+H11_adj2_cc.df_sort <- H11_adj2_cc.df[order(H11_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H11_comb <- rbind(H11_cc.df_sort, "Adj1", H11_adj1_cc.df_sort, "Adj2", H11_adj2_cc.df_sort)
+write.table(H11_comb, 'H11.txt', quote = F, row.names = F, sep = '\t')
+
+#H12
+PED <- read.delim("~/Desktop/Biobank Data/Genome genotyping/PLINK IPDGC protocol v3/PLPP4/Geno_matrix_PLPP401Mb.tab")
+H12_PLPP4_01Mb <- PED[,c("FID", "IID", "PAT", "MAT", "SEX", "PHENO","rs10458766_1","rs10458766_2","rs11199483_1","rs11199483_2","rs12570141_1","rs12570141_2")]
+geno <- data.frame(H12_PLPP4_01Mb[,c(7:12)])
+#For label, I only use numbers per SNP. In H12, there are 3 SNPs:
+label <- c("1", "2", "3")
+#Set binary pheno (0 ctrl, 1 pat):
+H12_PLPP4_01Mb$PHENO_01 <- H12_PLPP4_01Mb$PHENO-1
+y.bin <- 1*(H12_PLPP4_01Mb$PHENO_01=="1")
+#Non-adjusted:
+H12 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H12, nlines=10, digits=2)
+names(H12)
+H12_cc.df <- H12$cc.df
+H12_cc.df_sort <- H12_cc.df[order(H12_cc.df$`p-val`),]
+#Adjusted for age, sex, PC1-5:
+H12_adj1 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj1, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H12_adj1, nlines=10, digits=2)
+H12_adj1_cc.df <- H12_adj1$cc.df
+H12_adj1_cc.df_sort <- H12_adj1_cc.df[order(H12_adj1_cc.df$`p-val`),]
+#Adjusted for age. sex. PC1-5, nicotine
+H12_adj2 <- haplo.cc(y=y.bin, geno=geno, locus.label= label, x.adj = adj2, control = haplo.glm.control(haplo.freq.min = 0.01))
+print(H12_adj2, nlines=10, digits=2)
+H12_adj2_cc.df <- H12_adj2$cc.df
+H12_adj2_cc.df_sort <- H12_adj2_cc.df[order(H12_adj2_cc.df$`p-val`),]
+#Combina all analyses into one file
+H12_comb <- rbind(H12_cc.df_sort, "Adj1", H12_adj1_cc.df_sort, "Adj2", H12_adj2_cc.df_sort)
+write.table(H12_comb, 'H12.txt', quote = F, row.names = F, sep = '\t')
+
+# To visualize in Haploview:
+plink2 --bfile MPBC_FILTERED.PLPP4_01Mb --noweb --recode HV --snps-only --out MPBC_FILTERED.PLPP4_01Mb

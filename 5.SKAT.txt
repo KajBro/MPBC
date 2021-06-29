@@ -1,0 +1,139 @@
+## Burden analysis MPBC - PLPP4 region +/- 100 kb:
+# This analysis could be divided into 3 functional categories: CODING, NON-CODING AND CADD (Combined Annotation Dependent Depletion which scores the predicted deleteriousness of single nucleotide variants and insertion/deletions variants)
+# plink2 = PLINK v1.9
+# I chose to use the sequence kernel association test (SKAT) as a "burden test" since only 2.6% of the base pairs in PLPP4 are in coding regions and the SKAT is powerful when a large fraction of the variants in a region are non-causal or if the effects of causal variants are in different directions. The test aggregates associations between variants and phenotype and allows for variant interactions 
+
+# !/bin/bash
+# Annotate using ANNOVAR:
+# set wd
+
+# Downloading databases
+perl annotate_variation.pl -buildver hg19 -downdb -webfrom annovar refGene humandb/ 
+perl annotate_variation.pl -buildver hg19 -downdb -webfrom annovar ensGene humandb/ *
+perl annotate_variation.pl -buildver hg19 -downdb -webfrom annovar avsnp147 humandb/ *
+perl annotate_variation.pl -buildver hg19 -downdb -webfrom annovar gnomad211_genome humandb/ *
+
+# Recode to VCF format
+plink2 --bfile MPBC_FILTERED.PLPP4 --recode 'vcf-fid' --out MPBC_FILTERED.PLPP4
+
+# bgzip the vcf file
+PATH=/Users/kajsabrolin/rvtests/third/tabix-0.2.6
+bgzip MPBC_FILTERED.PLPP4.vcf
+tabix -f -p vcf AMPBC_FILTERED.PLPP4.vcf.gz
+
+# Convert to format that matches annovar and annotate
+perl convert2annovar.pl -format vcf4 -allsample -withfreq AMPBC_FILTERED.PLPP4.vcf.gz > AMPBC_FILTERED.PLPP4_ANNOVAR
+
+perl table_annovar.pl MPBC_FILTERED.PLPP4_ANNOVAR2.txt humandb/ -buildver hg19 --thread 16 -out PLPP4.annovar -remove -protocol avsnp147,refGene,ensGene,gnomad211_genome -operation f,g,g,f -nastring .
+
+# Trim output
+head -1 PLPP4.annovar.hg19_multianno.txt > header.txt
+colct="$(wc -w header.txt| cut -f1 -d' ')"
+cut -f1-$colct PLPP4.annovar.hg19_multianno.txt  > PLPP4.trimmed.annotation_KB.txt
+
+# Only had one coding variant in my data, therefore using all variants in the following analyses (genotyped data)
+
+## GENERATE VCF FILES 
+
+# GENOTYPED DATA
+plink2 --bfile MPBC_FILTERED.PLPP4_01Mb --recode vcf --out MPBC_FILTERED.PLPP4_01Mb
+
+#REFORMAT FILES (BGZIP_TABIX)
+PATH=/Users/kajsabrolin/rvtests/third/tabix-0.2.6/
+bgzip MPBC_FILTERED.PLPP4_01Mb.vcf
+tabix -f -p vcf MPBC_FILTERED.PLPP4_01Mb.vcf.gz
+
+## PERFORM ANALYSES BASED ON FREQUENCY (
+
+## MAF <0.05 
+
+#!/bin/bash
+PATH=/Users/kajsabrolin/rvtests/executable
+rvtest --noweb --inVcf MPBC_FILTERED.PLPP4_01Mb.vcf.gz --freqUpper 0.05 --pheno sampleInfo.txt --covar sampleInfo.txt --covar-name Sex,AGE,PC1,PC2,PC3,PC4,PC5 --kernel skat --geneFile refFlat_hg19.txt --out BURDEN.PLPP4.maf005
+
+##MAF <0.01 
+
+#There is only 1 SNP with MAF<0.01 - will not use this
+#!/bin/bash
+rvtest --noweb --inVcf MPBC_FILTERED.PLPP4_01Mb.vcf.gz --freqUpper 0.01 --pheno sampleInfo.txt --covar sampleInfo.txt --covar-name Sex,AGE,PC1,PC2,PC3,PC4,PC5 --kernel skat --geneFile refFlat_hg19.txt --out BURDEN.PLPP4.maf001
+
+
+
+## IMPUTED DATA
+# Rsq>0.8
+
+# set wd
+# Variants with low imputation quality has been excluded but sex and phenotype info needs to be added
+
+# Add sex and phenotype info: 
+plink2 --bfile MPBC_HRC_Rsq08 --update-sex sex_info.txt --make-bed --out MPBC_HRC_Rsq08_updatedsex
+
+# Update phenotype info:
+plink2 --bfile MPBC_HRC_Rsq08_updatedsex --make-pheno pheno_info.txt '*' --make-bed --out MPBC_HRC_Rsq08_updatedpheno
+
+# Withdraw the PLPP4 region +/- 100kb: PLPP4 position on GRCh37/hg19:10:122216466-122349376 UCSC --> 10:122116466-122449376:
+plink2 --bfile MPBC_HRC_Rsq08_updatedpheno --chr 10 -from-bp 122116466 --to-bp 122449376 --make-bed --out MPBC_HRC_Rsq08_PLPP4.01Mb
+# Make vcf:
+plink2 --bfile MPBC_HRC_Rsq08_PLPP4.01Mb --recode vcf-fid --out MPBC_HRC_Rsq08_PLPP4.01Mb #Will transfer these files to the annular folder in PLPP4
+
+# ANNOTATION:
+# set wd
+
+# REFORMAT FILES (BGZIP_TABIX)
+PATH=/Users/kajsabrolin/rvtests/third/tabix-0.2.6
+bgzip MPBC_HRC_Rsq08_PLPP4.01Mb.vcf
+tabix -f -p vcf MPBC_HRC_Rsq08_PLPP4.01Mb.vcf.gz
+
+# Reset path
+
+# Convert to annovar format
+perl convert2annovar.pl -format vcf4 -allsample -withfreq MPBC_HRC_Rsq08_PLPP4.01Mb.vcf.gz > MPBC_HRC_Rsq08_PLPP4.01Mb_ANNOVAR_IMPUTED
+
+# Annotate
+perl table_annovar.pl MPBC_HRC_Rsq08_PLPP4.01Mb_ANNOVAR_IMPUTED humandb/ -buildver hg19 --thread 16 -out PLPP4_01Mb.annovar -remove -protocol avsnp147,refGene,ensGene,gnomad211_genome -operation f,g,g,f -nastring .
+
+head -1 PLPP4_01Mb.annovar.hg19_multianno.txt > header.txt
+colct="$(wc -w header.txt| cut -f1 -d' ')"
+cut -f1-$colct PLPP4_01Mb.annovar.hg19_multianno.txt  > PLPP4_01Mb_imputed.trimmed.annotation.txt
+
+# EXTRACT CODING VARIANTS
+awk '$7=="exonic" {print}' PLPP4_01Mb_imputed.trimmed.annotation.txt > PLPP4_01Mb_imputed.trimmed.annotation.coding.variants.txt
+awk '{print $1" "$2" "$2" "$7}' PLPP4_01Mb_imputed.trimmed.annotation.coding.variants.txt > PLPP4_01Mb_imputed.trimmed.annotation.coding.variants.SNPs.txt
+# Only 3 variants but will still run to get the MAF:
+# set wd
+plink2 --bfile MPBC_HRC_Rsq08_PLPP4.01Mb --extract range PLPP4_01Mb_imputed.trimmed.annotation.coding.variants.SNPs.txt --recode vcf-fid --out MPBC_HRC_Rsq08_PLPP4.01Mb_imputed_coding
+PATH=/Users/kajsabrolin/rvtests/third/tabix-0.2.6
+bgzip MPBC_HRC_Rsq08_PLPP4.01Mb_imputed_coding.vcf
+tabix -f -p vcf MPBC_HRC_Rsq08_PLPP4.01Mb_imputed_coding.vcf.gz
+
+## PERFORM ANALYSES BASED ON FREQUENCY
+
+## MAF <0.05 
+
+#!/bin/bash
+cd Desktop/toKajsa/BURDEN/Imputed_PLPP4
+PATH=/Users/kajsabrolin/rvtests/executable
+rvtest --noweb --inVcf MPBC_HRC_Rsq08_PLPP4.01Mb_imputed_coding.vcf.gz --freqUpper 0.05 --pheno sampleInfo_Imputed.txt --covar sampleInfo_Imputed.txt --covar-name Sex,AGE,PC1,PC2,PC3,PC4,PC5 --kernel skat --geneFile refFlat_hg19.txt --out BURDEN.PLPP4_01Mb_Imputed.maf005_coding
+
+## MAF <0.01 
+
+#!/bin/bash
+rvtest --noweb --inVcf MPBC_HRC_Rsq08_PLPP4.01Mb_imputed_coding.vcf.gz --freqUpper 0.01 --pheno  sampleInfo_Imputed.txt --covar sampleInfo_Imputed.txt --covar-name Sex,AGE,PC1,PC2,PC3,PC4,PC5 --kernel skat --geneFile refFlat_hg19.txt --out BURDEN.PLPP4_01Mb_Imputed.maf001_coding
+
+
+# ALL VARIANTS
+# set wd and bgzip
+PATH=/Users/kajsabrolin/rvtests/third/tabix-0.2.6
+bgzip MPBC_HRC_Rsq08_PLPP4.01Mb.vcf
+tabix -f -p vcf MPBC_HRC_Rsq08_PLPP4.01Mb.vcf.gz
+
+## MAF <0.05 
+
+#!/bin/bash
+PATH=/Users/kajsabrolin/rvtests/executable
+rvtest --noweb --inVcf MPBC_HRC_Rsq08_PLPP4.01Mb.vcf.gz --freqUpper 0.05 --pheno sampleInfo_Imputed.txt --covar sampleInfo_Imputed.txt --covar-name Sex,AGE,PC1,PC2,PC3,PC4,PC5 --kernel skat --geneFile refFlat_hg19.txt --out BURDEN.PLPP4_01Mb_Imputed.maf005
+
+## MAF <0.01 
+
+#!/bin/bash
+rvtest --noweb --inVcf MPBC_HRC_Rsq08_PLPP4.01Mb.vcf.gz --freqUpper 0.01 --pheno  sampleInfo_Imputed.txt --covar sampleInfo_Imputed.txt --covar-name Sex,AGE,PC1,PC2,PC3,PC4,PC5 --kernel skat --geneFile refFlat_hg19.txt --out BURDEN.PLPP4_01Mb_Imputed.maf001
